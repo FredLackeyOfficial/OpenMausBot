@@ -337,6 +337,11 @@ desktop routing, cancellation, and computer authority cleanup.
 
 ## Evidence
 
+The [per-bot container worker recipe](container-workers.md) checks packaged
+provider workers, filesystem isolation, coordination, and Stop/restart behavior.
+The [container worker coverage record](container-workers-coverage.md) separates
+synthetic protocol evidence, installed-client checks, and live-provider qualification.
+
 The [Gemini speech fixture](gemini-speech.md) checks write-only credentials,
 voice selection and WAV synthesis against an offline provider in an isolated
 server, with manual steps for real Google access and playback.

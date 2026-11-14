@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=omb-container-runtime:fixture
+FROM ${BASE_IMAGE}
+USER root
+RUN mv /opt/omb/runtime/container-worker.js /opt/omb/runtime/container-worker-runtime.js
+COPY server/container-workers/testing/matrix-worker.mjs /opt/omb/runtime/container-worker.js
+USER node

@@ -1,22 +1,42 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { accessSync, constants, closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, chmodSync, mkdtempSync, rmSync, chownSync, readdirSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { launchVerificationServer, runControlOmb, verificationServerEnvironment } from "./control-omb.ts";
 import { waitForExit } from "../server/testing/cleanup.ts";
 
 const auth = process.env.OMB_CONTAINER_AUTH_FILE;
 if (!auth) throw new Error("Set OMB_CONTAINER_AUTH_FILE to an explicitly selected Codex auth.json for the live proof");
-const docker = process.env.OMB_DOCKER ?? "/usr/local/bin/docker";
+const dockerCommand = process.env.OMB_DOCKER ?? "docker";
+const dockerCandidates = dockerCommand.includes("/") ? [resolve(dockerCommand)]
+  : (process.env.PATH ?? "").split(delimiter).map(directory => resolve(directory, dockerCommand));
+const docker = dockerCandidates.find(candidate => { try { accessSync(candidate, constants.X_OK); return true; } catch { return false; } });
+if (!docker) throw new Error(`Docker executable not found: ${dockerCommand}`);
 const dockerConfig = process.env.OMB_DOCKER_CONFIG;
 const dockerBase = dockerConfig ? ["--config", dockerConfig] : [];
 const dockerRun = (...args: string[]) => execFileSync(docker, [...dockerBase, ...args], { encoding: "utf8", timeout: 30_000 }).trim();
-const image = dockerRun("image", "inspect", "--format", "{{.Id}}", "omb-container-codex:0.169.0");
+const selectedImage = process.env.OMB_WORKER_IMAGE;
+if (!selectedImage) throw new Error("Set OMB_WORKER_IMAGE to a built generic worker image containing the selected Codex CLI; the old CLI-only prototype image is incompatible");
+const image = dockerRun("image", "inspect", "--format", "{{.Id}}", selectedImage);
+const workerRoot = realpathSync(mkdtempSync(join(tmpdir(), "omb-live-workers-")));
+const workerUser = process.platform === "linux" && process.getuid?.() ? `${process.getuid()}:${process.getgid!()}` : "1000:1000";
+const own = (path: string) => {
+  if (process.platform === "linux" && process.getuid?.() === 0) {
+    chownSync(path, 1000, 1000);
+    for (const child of readdirSync(path, { withFileTypes: true })) {
+      const nested = join(path, child.name);
+      if (child.isDirectory()) own(nested); else chownSync(nested, 1000, 1000);
+    }
+  }
+};
 const fixture = await launchVerificationServer();
 const { url, logPath } = fixture.info;
 const dataDir = realpathSync(fixture.info.dataDir);
+const policyPath = join(dataDir, "container-workers.json");
+const policyFilter = `label=org.openmausbot.policy=${createHash("sha256").update(policyPath).digest("hex")}`;
 const evidence: unknown[] = [];
 let child: ChildProcess = fixture.child;
 const networks: string[] = [];
@@ -62,9 +82,9 @@ try {
   await waitForExit(child, { signal: "SIGTERM" });
   const workers: Record<string, any> = {};
   for (const [index, bot] of [chief, specialist].entries()) {
-    const root = join(dataDir, "workers", bot.id);
+    const root = join(workerRoot, bot.id);
     const home = join(root, "home"), temp = join(root, "tmp");
-    const workspaces = [join(dataDir, "workspaces", bot.id), join(dataDir, "task-workspaces", bot.id)];
+    const workspaces = [join(root, "work"), join(root, "tasks")];
     for (const path of [join(home, ".codex"), temp, ...workspaces]) mkdirSync(path, { recursive: true, mode: 0o700 });
     copyFileSync(auth, join(home, ".codex", "auth.json"));
     chmodSync(join(home, ".codex", "auth.json"), 0o600);
@@ -72,9 +92,8 @@ try {
     const network = `omb-proof-${randomUUID()}`;
     dockerRun("network", "create", "--label", "org.openmausbot.proof=true", network);
     networks.push(network);
-    workers[bot.id] = { instanceId: `container-${index}`, image, command: ["codex"], home, temp, workspaces, network };
+    workers[bot.id] = { instanceId: `container-${index}`, image, home, temp, workspaces, network, user: workerUser };
   }
-  const policyPath = join(dataDir, "container-workers.json");
   writeFileSync(policyPath, JSON.stringify({ docker, dockerConfig, workers }, null, 2), { mode: 0o600 });
   const configPath = join(dataDir, "config.json");
   const config = JSON.parse(readFileSync(configPath, "utf8"));
@@ -85,8 +104,9 @@ try {
     if (!workers[bot.id]) continue;
     bot.modelSelection = { instanceId: workers[bot.id].instanceId, model: process.env.OMB_CONTAINER_MODEL ?? "gpt-6.1-sol" };
     bot.approvalMode = "full";
+    bot.cwd = workers[bot.id].workspaces[0];
     bot.soul = "Run only the specific verification requested. Keep replies concise. Use coordinate_bots for delegation.";
-    for (const task of bot.tasks) { task.modelSelection = bot.modelSelection; task.approvalMode = "full"; }
+    for (const task of bot.tasks) { task.modelSelection = bot.modelSelection; task.approvalMode = "full"; task.cwd = join(workers[bot.id].workspaces[1], task.threadId); mkdirSync(task.cwd, { recursive: true }); }
   }
   writeFileSync(join(dataDir, "bots.json"), JSON.stringify(saved));
   const specialistWork = join(workers[specialist.id].workspaces[1], specialist.activeTaskId);
@@ -102,6 +122,7 @@ const old=fs.existsSync(${JSON.stringify(output)})?JSON.parse(fs.readFileSync(${
 function finish(adminStatus){fs.writeFileSync(${JSON.stringify(output)},JSON.stringify({count:(old.count||0)+1,uid:process.getuid(),home:os.homedir(),temp:os.tmpdir(),forbiddenBlocked:true,hostname:os.hostname(),adminStatus,adminBlocked:true}));console.log('CONTAINER_PROOF_OK');}
 const request=http.get({hostname:'host.docker.internal',port:${Number(new URL(url).port)},path:'/api/bots',headers:{host:'127.0.0.1:${Number(new URL(url).port)}'}},response=>{assert.ok(response.statusCode>=400,'Coordinator admin API exposed to worker');response.resume();finish(response.statusCode);});
 request.setTimeout(3000,()=>request.destroy(new Error('timeout')));request.on('error',()=>finish('unreachable'));`);
+  own(workerRoot);
   await restart();
   console.info(JSON.stringify({ stage: "launched", url, logPath, dataDir }));
   const direct = await control("send", "--bot", specialist.id, "--task", specialist.activeTaskId, "--text", `Run exactly: node ${probePath} . Report its output. Do not edit the script.`);
@@ -134,10 +155,8 @@ request.setTimeout(3000,()=>request.destroy(new Error('timeout')));request.on('e
   await control("send", "--bot", specialist.id, "--task", specialist.activeTaskId, "--text", `Run node ${longScript} in the foreground. It deliberately waits forever for a Stop test; keep it running and do not change it.`);
   await poll(() => existsSync(heartbeat), 120_000);
   await control("interrupt", "--bot", specialist.id, "--task", specialist.activeTaskId);
-  await poll(() => dockerRun("ps", "-q", "--filter", `label=org.openmausbot.bot=${specialist.id}`) === "", 30_000);
-  const stoppedAt = readFileSync(heartbeat, "utf8");
-  await new Promise(resolve => setTimeout(resolve, 500));
-  assert.equal(readFileSync(heartbeat, "utf8"), stoppedAt);
+  await poll(() => dockerRun("ps", "-q", "--filter", policyFilter, "--filter", `label=org.openmausbot.bot=${specialist.id}`) === "", 30_000);
+  assert.equal(dockerRun("ps", "-q", "--filter", policyFilter, "--filter", `label=org.openmausbot.bot=${specialist.id}`), "", "Docker confirms the worker and its descendants have terminated");
   evidence.push({ stage: "stop", heartbeatStopped: true, workerContainersRemaining: 0 });
   console.info(JSON.stringify({ stage: "stop-passed" }));
   await api("PATCH", `/api/bots/${specialist.id}/tasks/${specialist.activeTaskId}`, { approvalMode: "ask" });
@@ -159,13 +178,14 @@ request.setTimeout(3000,()=>request.destroy(new Error('timeout')));request.on('e
 } finally {
   await waitForExit(child, { signal: "SIGTERM" });
   for (const botId of botIds) {
-    const ids = dockerRun("ps", "-aq", "--filter", `label=org.openmausbot.bot=${botId}`).split(/\s+/).filter(Boolean);
+    const ids = dockerRun("ps", "-aq", "--filter", policyFilter, "--filter", `label=org.openmausbot.bot=${botId}`).split(/\s+/).filter(Boolean);
     if (ids.length) dockerRun("rm", "-f", ...ids);
   }
   for (const network of networks) dockerRun("network", "rm", network);
   const evidencePath = `${logPath}.container-workers.json`;
   writeFileSync(evidencePath, JSON.stringify({ passed, image, evidence }, null, 2));
   await fixture.close();
+  rmSync(workerRoot, { recursive: true, force: true });
   if (previousToken === undefined) delete process.env.OPENMAUSBOT_TOKEN; else process.env.OPENMAUSBOT_TOKEN = previousToken;
   console.info(JSON.stringify({ passed, evidencePath, logPath, fixtureRemoved: !existsSync(dataDir) }));
 }

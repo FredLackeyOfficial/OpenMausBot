@@ -315,6 +315,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:packaged-server
+      - name: Verify isolated provider workers in Docker
+        if: runner.os == 'Linux'
+        run: node scripts/smoke-container-workers.mjs
 
   windows-cua:
     needs: static

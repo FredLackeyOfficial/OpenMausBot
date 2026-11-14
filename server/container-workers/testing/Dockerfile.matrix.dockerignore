@@ -1,0 +1,5 @@
+*
+!server
+!server/container-workers
+!server/container-workers/testing
+!server/container-workers/testing/matrix-worker.mjs

@@ -34,7 +34,7 @@ printf '%s\\n' "$output" | grep -q "live tier skipped"
   ],
 };
 
-export const PACKAGED_SERVER_LANE = { name: "packaged server smoke (ubuntu-latest)", env: {}, commands: ["pnpm test:packaged-server"] };
+export const PACKAGED_SERVER_LANE = { name: "packaged server smoke (ubuntu-latest)", env: {}, commands: ["pnpm test:packaged-server", "node scripts/smoke-container-workers.mjs"] };
 
 /** Every lane of ci-scope's `linux_lanes` plan. */
 export function lanesFor(plan, retryLog) {

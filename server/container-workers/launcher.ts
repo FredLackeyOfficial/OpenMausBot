@@ -1,100 +1,135 @@
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID, createHash } from "node:crypto";
-import { createInterface } from "node:readline";
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import { readWorkerPolicy, containsPath } from "./policy.ts";
-import { agentsMcp } from "../drivers/agents-mcp.ts";
-import { allowsTool } from "../../shared/tool-scope.ts";
-import type { Json } from "../drivers/agents-client.ts";
+import { createHash, randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import { readWorkerPolicy } from "./policy.ts";
+import { createWorkerTemp } from "./temp.ts";
 
-const [policyPath, instanceId, ...originalArgs] = process.argv.slice(2);
-if (!policyPath || !instanceId) throw new Error("Expected policy path and instance id");
+// The provider may reuse a generation only after this supervisor confirms cleanup.
+// Uncaught exceptions and unexpected exits must not masquerade as ordinary worker exits.
+let cleanupConfirmed = false;
+process.on("exit", () => { if (!cleanupConfirmed) process.exitCode = 70; });
+
+const [policyPath, botId, ...extra] = process.argv.slice(2);
+if (!policyPath || !botId || extra.length) throw new Error("Expected container policy path and bot id");
 const policy = readWorkerPolicy(policyPath);
-const entry = Object.entries(policy.workers).find(([, worker]) => worker.instanceId === instanceId);
-if (!entry) throw new Error("Unassigned container engine");
-const [botId, worker] = entry;
-if (process.env.OMB_BOT_ID && process.env.OMB_BOT_ID !== botId) throw new Error("Container bot identity mismatch");
-const appServer = originalArgs[0] === "app-server";
-const key = createHash("sha256").update(`${policyPath}:${botId}`).digest("hex").slice(0, 16);
-const name = `omb-worker-${key}${appServer ? "" : `-probe-${randomUUID()}`}`;
+const worker = policy.workers[botId];
+if (!worker) throw new Error("Unassigned container bot");
+const policyHash = createHash("sha256").update(policyPath).digest("hex");
+const key = createHash("sha256").update(`${policyHash}:${botId}`).digest("hex").slice(0, 24);
+const name = `omb-worker-${key}`;
 const runId = randomUUID();
-const bridgeSocket = `/tmp/omb-${randomUUID()}.sock`;
 const dockerArgs = [...(policy.dockerConfig ? ["--config", policy.dockerConfig] : []), ...(policy.context ? ["--context", policy.context] : [])];
-const source = dirname(fileURLToPath(import.meta.url));
-const args: string[] = [];
-for (let index = 0; index < originalArgs.length; index++) {
-  const value = originalArgs[index]!;
-  if ((value === "-c" || value === "--config") && originalArgs[index + 1]?.startsWith("mcp_servers.")) { index++; continue; }
-  args.push(value);
-}
-const scope = JSON.parse(process.env.OMB_CONTAINER_TOOL_SCOPE ?? "null");
-const allowed = new Set(["coordinate_bots", "assignment_status"]);
-const agentsEnv = { ...process.env, OMB_AGENTS_TOOL_BRIDGE: "0" };
-const handle = agentsMcp(agentsEnv);
-const hasBridge = appServer && process.env.OMB_BOT_ID === botId && Boolean(process.env.OMB_HARNESS_URL);
-if (hasBridge) args.push("-c", 'mcp_servers.agents.command="node"', "-c", 'mcp_servers.agents.args=["/opt/omb/mcp-client.mjs"]',
-  "-c", 'mcp_servers.agents.env_vars=["OMB_BRIDGE_SOCKET"]', "-c", 'mcp_servers.agents.default_tools_approval_mode="approve"',
-  "-c", "mcp_servers.agents.tool_timeout_sec=300");
-const cwd = worker.workspaces.find((root) => containsPath(root, process.cwd())) ? process.cwd() : worker.workspaces[0]!;
-const mount = (from: string, to: string, readonly = false) => ["--mount", `type=bind,src=${from},dst=${to}${readonly ? ",readonly" : ""}`];
-const child = spawn(policy.docker, [...dockerArgs, "run", "--rm", "--init", "-i", "--name", name,
+const dockerEnv = { PATH: process.env.PATH, HOME: process.env.HOME };
+const temp = createWorkerTemp(worker);
+const [uid, gid] = worker.user.split(":");
+const mount = (from: string, to: string) => ["--mount", `type=bind,src=${from},dst=${to}`];
+const createArgs = [...dockerArgs, "create", "--rm", "--init", "-i", "--name", name,
   "--label", "org.openmausbot.container-worker=true", "--label", `org.openmausbot.bot=${botId}`,
-  "--label", `org.openmausbot.run=${runId}`,
-  "--label", `org.openmausbot.policy=${createHash("sha256").update(policyPath).digest("hex")}`,
-  "--user", worker.user, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=1g", "--cpus=1",
-  "--network", worker.network, "--workdir", cwd,
-  "--env", "HOME=/home/agent", "--env", "CODEX_HOME=/home/agent/.codex", "--env", "TMPDIR=/tmp",
-  "--env", `OMB_BRIDGE_SOCKET=${bridgeSocket}`,
-  ...mount(worker.home, "/home/agent"), ...mount(worker.temp, "/tmp"),
+  "--label", `org.openmausbot.run=${runId}`, "--label", `org.openmausbot.policy=${policyHash}`,
+  "--user", worker.user, "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+  "--pids-limit=128", "--memory=1g", "--cpus=1", "--network", worker.network,
+  "--tmpfs", `/run/omb:rw,noexec,nosuid,nodev,size=16777216,mode=0700,uid=${uid},gid=${gid}`,
+  "--workdir", worker.workspaces[0]!,
+  "--env", "HOME=/home/agent", "--env", "TMPDIR=/tmp", "--env", "TMP=/tmp", "--env", "TEMP=/tmp",
+  "--env", "PATH=/usr/local/bin:/usr/bin:/bin", "--env", "OMB_DATA_DIR=/home/agent/.openmausbot",
+  "--env", "XDG_RUNTIME_DIR=/run/omb", "--env", "OMB_CONTAINER_IPC_DIR=/run/omb",
+  "--env", "XDG_CONFIG_HOME=/home/agent/.config", "--env", "XDG_CACHE_HOME=/home/agent/.cache",
+  "--env", "XDG_DATA_HOME=/home/agent/.local/share", "--env", "XDG_STATE_HOME=/home/agent/.local/state",
+  ...mount(worker.home, "/home/agent"), ...mount(temp, "/tmp"),
   ...worker.workspaces.flatMap((root) => mount(root, root)),
-  ...mount(`${source}/worker.mjs`, "/opt/omb/worker.mjs", true), ...mount(`${source}/mcp-client.mjs`, "/opt/omb/mcp-client.mjs", true),
-  "--entrypoint", "node", worker.image, "/opt/omb/worker.mjs"], { stdio: ["pipe", "pipe", "pipe"] });
-const send = (value: unknown) => { if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(value)}\n`); };
-child.stdin.on("error", () => {});
-child.stderr.pipe(process.stderr);
-send({ start: [...worker.command, ...args] });
-let inflight = 0;
-createInterface({ input: child.stdout }).on("line", (line) => {
-  try {
-    const envelope = JSON.parse(line);
-    if (typeof envelope.stdout === "string") process.stdout.write(Buffer.from(envelope.stdout, "base64"));
-    else if (typeof envelope.stderr === "string") process.stderr.write(Buffer.from(envelope.stderr, "base64"));
-    else if (typeof envelope.bridge === "string" && envelope.message && hasBridge) {
-      const message = envelope.message as Json;
-      const params = (message.params ?? {}) as Json;
-      const name = params.name as string;
-      const refused = () => send({ bridge: envelope.bridge, message: { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Container coordination policy refused this request" } } });
-      if (inflight >= 16 || !["initialize", "notifications/initialized", "ping", "tools/list", "tools/call"].includes(String(message.method)) ||
-        (message.method === "tools/call" && (!allowed.has(name) || !allowsTool(scope ?? undefined, { kind: "mcp", server: "agents", name }, params.arguments)))) return refused();
-      inflight++;
-      void handle(message).then((response) => {
-        if (response && message.method === "tools/list") {
-          const result = response.result as { tools?: { name: string }[] };
-          if (result.tools) result.tools = result.tools.filter((tool) => allowed.has(tool.name) && allowsTool(scope ?? undefined, { kind: "mcp", server: "agents", name: tool.name }));
-        }
-        if (response) send({ bridge: envelope.bridge, message: response });
-      }, refused).finally(() => inflight--);
-    }
-  } catch { child.stdin.end(); }
+  "--entrypoint", "node", worker.image, "/opt/omb/runtime/container-worker.js"];
+
+let attach: ReturnType<typeof spawn> | undefined;
+let stopRequested = false, requestedCode = 0;
+let notifyStop!: () => void;
+const stopped = new Promise<void>((resolve) => { notifyStop = resolve; });
+const requestStop = (code: number) => { stopRequested = true; requestedCode = code; notifyStop(); };
+let buffered: Buffer[] = [], bufferedBytes = 0;
+process.stdin.on("data", (chunk: Buffer) => {
+  if (stopRequested) return;
+  if (attach?.stdin) {
+    if (!attach.stdin.write(chunk)) process.stdin.pause();
+  } else {
+    bufferedBytes += chunk.length;
+    if (bufferedBytes > 16 * 1024 * 1024) requestStop(1);
+    else buffered.push(chunk);
+  }
 });
-process.stdin.on("data", (chunk: Buffer) => send({ stdin: chunk.toString("base64") }));
-process.stdin.on("end", () => send({ end: true }));
-let stopping = false;
-function stop() {
-  if (stopping) return;
-  stopping = true;
-  child.stdin.end();
-  const found = spawnSync(policy.docker, [...dockerArgs, "inspect", "--format", '{{index .Config.Labels "org.openmausbot.run"}}', name], { encoding: "utf8", timeout: 5_000 });
-  if (found.status === 0 && found.stdout.trim() === runId) spawnSync(policy.docker, [...dockerArgs, "rm", "-f", name], { stdio: "ignore", timeout: 10_000 });
-}
-process.on("SIGTERM", () => { stop(); process.exit(143); });
-process.on("SIGINT", () => { stop(); process.exit(130); });
+process.stdin.on("end", () => requestStop(0));
+process.stdin.on("error", () => requestStop(1));
+process.stdout.on("error", () => requestStop(1));
+process.stderr.on("error", () => requestStop(1));
+process.on("SIGTERM", () => requestStop(143));
+process.on("SIGINT", () => requestStop(130));
 const parent = process.ppid;
-const parentWatch = setInterval(() => {
-  if (process.ppid !== parent) { stop(); process.exit(1); }
-}, 500);
+const parentWatch = setInterval(() => { if (process.ppid !== parent) requestStop(1); }, 500);
 parentWatch.unref();
-child.on("error", (error) => { console.error(error.message); stop(); process.exit(1); });
-child.on("exit", (code) => { process.exitCode = code ?? 1; process.stdin.destroy(); });
-process.on("exit", stop);
+
+interface Creation { code: number | null; id?: string; uncertain: boolean; error?: string }
+const creation = await new Promise<Creation>((resolve) => {
+  // Creation cannot execute the worker or receive provider credentials; Stop waits for this transaction before start.
+  const child = spawn(policy.docker, createArgs, { stdio: ["ignore", "pipe", "pipe"], env: dockerEnv });
+  let output = "", errors = "", uncertain = false, spawnError: string | undefined;
+  const timer = setTimeout(() => { uncertain = true; child.kill("SIGKILL"); }, 10_000);
+  child.stdout.on("data", (chunk: Buffer) => { output = (output + String(chunk)).slice(-1024); });
+  child.stderr.on("data", (chunk: Buffer) => { errors = (errors + String(chunk)).slice(-4096); });
+  child.on("error", (error) => { spawnError = error.message; });
+  child.on("close", (code, signal) => {
+    clearTimeout(timer);
+    const id = output.trim();
+    resolve({ code, ...(code === 0 && /^[a-f0-9]{64}$/.test(id) ? { id } : {}), uncertain: uncertain || signal !== null,
+      ...(spawnError || errors ? { error: spawnError ?? errors } : {}) });
+  });
+});
+if (creation.error) process.stderr.write(`${creation.error}\n`);
+
+function cleanup(): boolean {
+  const target = creation.id ?? name;
+  const found = spawnSync(policy.docker, [...dockerArgs, "inspect", "--format", '{{.Id}} {{index .Config.Labels "org.openmausbot.run"}}', target],
+    { encoding: "utf8", timeout: 3_000, env: dockerEnv });
+  const [containerId, owner] = found.stdout?.trim().split(/\s+/) ?? [];
+  let complete = false;
+  if (found.status === 0 && owner === runId && /^[a-f0-9]{64}$/.test(containerId ?? "")) {
+    const removed = spawnSync(policy.docker, [...dockerArgs, "rm", "-f", containerId!], { stdio: "ignore", timeout: 5_000, env: dockerEnv });
+    complete = removed.status === 0;
+    const deadline = Date.now() + 2_000;
+    while (!complete && Date.now() < deadline) {
+      const remaining = spawnSync(policy.docker, [...dockerArgs, "inspect", "--format", "{{.Id}}", containerId!],
+        { encoding: "utf8", timeout: 2_000, env: dockerEnv });
+      complete = remaining.status === 1 && /No such (?:object|container)/i.test(remaining.stderr ?? "");
+      if (remaining.status !== 0) break;
+    }
+  } else if (creation.id) {
+    complete = found.status === 1 && /No such (?:object|container)/i.test(found.stderr ?? "");
+  } else if (!creation.uncertain && found.status === 0 && owner !== runId) {
+    complete = true;
+  }
+  complete &&= !creation.uncertain;
+  attach?.stdin?.destroy();
+  if (complete) {
+    try { rmSync(temp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch { complete = false; }
+  }
+  if (!complete) process.stderr.write(`Container cleanup incomplete for run ${runId}; private temp retained\n`);
+  return complete;
+}
+
+let code = creation.id ? requestedCode : 125;
+if (creation.id && !stopRequested) {
+  attach = spawn(policy.docker, [...dockerArgs, "start", "--attach", "--interactive", creation.id],
+    { stdio: ["pipe", "pipe", "pipe"], env: dockerEnv });
+  const closed = new Promise<number>((resolve) => {
+    attach!.once("error", (error) => { process.stderr.write(`${error.message}\n`); resolve(1); });
+    attach!.once("close", (exitCode) => resolve(exitCode ?? 1));
+  });
+  attach.stdin!.on("error", () => {});
+  attach.stdin!.on("drain", () => process.stdin.resume());
+  attach.stdout!.pipe(process.stdout, { end: false });
+  attach.stderr!.pipe(process.stderr, { end: false });
+  for (const chunk of buffered) if (!attach.stdin!.write(chunk)) process.stdin.pause();
+  buffered = []; bufferedBytes = 0;
+  code = await Promise.race([closed, stopped.then(() => requestedCode)]);
+}
+const complete = cleanup();
+cleanupConfirmed = complete;
+clearInterval(parentWatch);
+process.exit(complete ? code : 70);

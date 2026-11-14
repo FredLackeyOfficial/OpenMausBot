@@ -7,6 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, dirname, isAbsolute, normalize } from "node:path";
 
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
+import { workerIpcDirectory } from "../container-workers/ipc.ts";
 import { openStartupModelCatalog, unconfirmedModelCatalog, writeStartupModelCache } from "../startup-model-catalog.ts";
 import { writeFileAtomicIfChanged } from "../atomic.ts";
 import { augmentedPath, findCliCandidates } from "../env-path.ts"; import { BASH_MAX_TIMEOUT_MS } from "../system-prompt.ts";
@@ -429,7 +430,7 @@ export function permissionSocketPath(threadId: string, botId?: string) {
   const key = botId ? `${botId}\0${threadId}` : threadId;
   const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
   const digest = createHash("sha256").update(key).digest("hex").slice(0, 4);
-  return brokerSocketPath(DATA_DIR, `${prefix}${digest}`);
+  return brokerSocketPath(workerIpcDirectory() ?? DATA_DIR, `${prefix}${digest}`);
 }
 
 /** Broker bind paths, in order. Windows pipe names are never unlinkable (a hung child can hold one
@@ -441,7 +442,7 @@ export function brokerSocketCandidates(threadId: string, botId?: string): string
       .update(`${DATA_DIR}\0${process.pid}\0${botId ?? ""}\0${threadId}`)
       .digest("hex")
       .slice(0, 16);
-    return [base, join(tmpdir(), `omb-perm-${scope}.sock`)];
+    return [base, join(workerIpcDirectory() ?? tmpdir(), `omb-perm-${scope}.sock`)];
   }
   return [
     base,

@@ -1,97 +1,105 @@
-# Native Codex in isolated Docker workers
+# Per-bot container workers
 
-This prototype keeps one OpenMausBot server for conversations and coordination and runs each bot's native Codex CLI in a dedicated Docker execution container. It uses Codex's existing `app-server` protocol, not ACP. The trusted server and launcher retain Docker authority; workers receive neither the Docker socket nor the server's coordination credentials.
+An optional `container-workers.json` in the coordinator's data directory assigns each engine instance to exactly one bot and Docker image. The complete engine adapter runs inside that bot's container: client creation, model probes, native protocols, ACP filesystem callbacks, API-backed tool loops, and helper processes. The coordinator retains conversations, user authentication, approval routing and Docker authority.
 
-The operator supplies `container-workers.json` in the server's data directory. Its presence enables a closed policy: every engine must have a worker assignment, every turn must identify the assigned bot, and its working directory must be within that bot's declared mounts. Unknown engines and wrong-bot selections fail before an engine starts. Engine settings in the UI cannot override the policy's launcher. Restart after changing this policy.
+This is a development integration awaiting upstream design review. Generic routing and simulated protocol coverage are distinct from qualification of installed clients and authenticated accounts. The adapter matrix must retain those distinctions; a missing binary or credential is not a passing test.
 
-Container mode also requires authenticated clients, including on loopback. A worker can appear to the server as a local caller on Docker Desktop. The ordinary local-service exceptions for reading chats, posting work and declining approvals are therefore disabled; only health and separately authenticated internal capability routes remain available without a paired session. Pair your operator client before enabling this policy, or start through `openmausbot serve` with `OMB_LOOPBACK_TRUST=service` and use its authenticated pairing flow. Run the standalone server: the embedded desktop-server mode is refused.
+## Build and configuration
 
-## Build and configure
-
-From a source checkout with Node 26 and dependencies installed:
+Build the runtime, then its base image from the repository root:
 
 ```sh
-docker build -t omb-container-codex:0.169.0 server/container-workers
+pnpm build:server
+docker build -f server/container-workers/Dockerfile -t omb-container-runtime:dev .
 ```
 
-The image installs native Codex CLI 0.169.0, Git and system TLS certificates. Resolve the resulting image ID with `docker image inspect` and use that immutable ID in the policy. Build on the intended CPU architecture.
+The image copies the self-contained `dist-server` tree. It does not bind-mount the coordinator's checkout or `node_modules`. Build derived images containing the Linux clients required by each bot. API-backed engines need no agent CLI. Use pinned client versions and record the resulting image digest when qualifying a deployment.
 
-Create separate home, temporary, bot-workspace and conversation-workspace directories for every bot. Their host paths must be canonical absolute directories, with no overlap, and writable by the configured non-root UID/GID. Authenticate Codex separately in each bot's home, or provision an explicitly selected credential there. Do not mount your entire personal home or OpenMausBot data directory.
-
-Example policy for one existing bot (repeat with different directories, bot ID, instance ID and network for another):
+Create distinct, existing, canonical directories for each bot's home, temporary files and workspaces. The non-root container UID/GID must be able to write them on the Docker host. Keep coordinator data separate from these directories. An example policy is:
 
 ```json
 {
   "docker": "/usr/bin/docker",
   "workers": {
-    "ACTUAL-BOT-ID": {
-      "instanceId": "codex-project-a",
-      "image": "sha256:ACTUAL-IMAGE-ID",
-      "command": ["codex"],
-      "home": "/srv/omb-workers/project-a/home",
-      "temp": "/srv/omb-workers/project-a/tmp",
-      "workspaces": [
-        "/srv/openmausbot/workspaces/ACTUAL-BOT-ID",
-        "/srv/openmausbot/task-workspaces/ACTUAL-BOT-ID"
-      ],
-      "network": "omb-project-a",
+    "project-a-bot": {
+      "instanceId": "project-a-engine",
+      "image": "your-codex-worker:tested-version",
+      "home": "/srv/bots/project-a/home",
+      "temp": "/srv/bots/project-a/temp",
+      "workspaces": ["/srv/bots/project-a/work"],
+      "network": "project-a-egress",
       "user": "1000:1000"
     }
   }
 }
 ```
 
-Create each named network with `docker network create NAME`. `none` is the default and supports offline engines; live Codex needs network access. Shared default/host networks and reusing a named network across workers are refused. Dedicated networks separate Docker peers; this is not a general Internet/LAN egress firewall. Protect other host/LAN services independently. Keep the coordinator private and require authenticated access for remote clients.
-
-In the ordinary OpenMausBot `config.json`, register the matching engine:
+Register the corresponding instance in the ordinary server configuration:
 
 ```json
 {
   "instances": {
-    "codex-project-a": { "driver": "codex", "displayName": "Project A container", "config": {} }
+    "project-a-engine": {
+      "driver": "codex",
+      "config": { "cli": "codex" }
+    }
   }
 }
 ```
 
-Select that instance for the corresponding bot. The server enforces the binding when a turn starts, including a fallback dispatch; the UI may still let an operator save an invalid selection, but it cannot execute it. A newly created bot needs an explicit policy assignment before it can run. Existing unrelated VPS workers need no changes.
+The driver is preserved. The same mechanism accepts Claude, Pi, Muse Code, named ACP clients, `customAcp`, and API adapters from the built-in registry. Their normal driver-specific configuration applies **inside the image**. The prototype's old `command` policy field is accepted for migration but no longer selects an executable; use the instance's `config.cli` instead.
 
-Optional top-level `dockerConfig` and `context` select the operator's Docker configuration and context. Docker bind source paths must exist on the Docker host; the tested design colocates server and Docker, including Docker Desktop's host-file sharing. This is not an SSH path-transfer implementation.
+Select this instance for the assigned bot and set its working directory within its declared workspaces. Every configured engine needs an assignment; unassigned engines become unavailable. Sharing one engine instance between bots is refused. Restart after changing the policy. The initial implementation requires a Linux or macOS coordinator and Linux Docker images; Windows coordinator mode is explicitly refused.
 
-## Boundaries and current limitations
+Optional `dockerConfig` and `context` select an operator-owned Docker configuration/context. Bind source paths must exist on the Docker daemon's host. This is not an SSH file-transfer implementation. The tested local path uses a colocated coordinator and Docker daemon, including Docker Desktop's host-file sharing; a remote daemon needs separately provisioned matching directories.
 
-- Home maps to `/home/agent`, temporary files to `/tmp`, and workspace paths retain their host absolute paths. Roots are read-only except those explicit mounts. Containers run non-root with dropped capabilities, no privilege escalation, and CPU, memory and process limits.
-- One bot has at most one active `app-server` container. Concurrent execution attempts for that bot fail safely; this prototype does not yet queue multiple simultaneous conversations. Version/login/model probes use separate short-lived containers with that bot's mounts. Every execution container is removed when its launcher exits; files persist in the mounted directories.
-- Coordination crosses a framed stdio connection and a worker-local socket. The host permits only `coordinate_bots` and `assignment_status`, retaining the existing turn token and selected tool restrictions. Model-generated requests cannot choose a Docker container or executable. No general shell/file tool runs on the coordinator through this bridge.
-- The shared server remains trusted with conversations and shared results. Isolation between worker filesystems does not make conversations secret from the server.
-- Other application tools, host browser/desktop integration and custom MCP servers are disabled for these workers. Native shell/files are supported. Attachments outside the declared mounts have not been integrated or qualified. Native tool-selection restrictions are refused rather than silently weakened.
-- Background title/memory/permission-review APIs are disabled because their interface lacks a bot identity. Model discovery stays contained. Automatic memory upkeep requires further work.
-- The operator must leave OpenMausBot's separate `OMB_BOT_BOX` process sandbox off for this prototype; it has not been integrated with the Docker-authorized launcher. The launcher is trusted host code and never runs inside a worker.
-- This is a source-checkout prototype. Packaged desktop distribution, Linux VPS deployment, resource sizing under load and a hostile-protocol security audit remain unqualified.
+## Boundary and deliberate limitations
 
-## Reproducible proof
+- Home maps to `/home/agent`; each worker generation gets its own temporary subdirectory mounted at `/tmp`; workspace paths retain their absolute names. A private, size-limited `/run/omb` tmpfs holds IPC sockets; `/tmp` and `TMPDIR` remain on the configured host bind. This avoids Docker Desktop shared-filesystem socket permission limitations without weakening broker permissions. Home/workspace state persists. The root filesystem and runtime are read-only; containers run without root, added capabilities, privilege escalation or the Docker socket, and with CPU/memory/process limits.
+- Canonical directory mounts cannot overlap each other or coordinator/administrative directories. Reserved runtime/device destinations are refused. The operator must provision trusted mount parents and exclude preexisting service sockets or other deliberately shared capabilities.
+- `network: "none"` is the default. Online clients need an explicitly created dedicated network. A unique Docker network is **not** an Internet/LAN/host firewall. Broader egress restrictions require separate operator enforcement; the integration does not claim to provide them.
+- Only explicit per-instance environment reaches the driver. Reserved home, temporary, runtime, control-plane and process-injection variables are refused. The coordinator's global provider keys and normal CLI logins are not automatically copied. Provision the selected account in that bot's home or its explicit instance environment. An agent with shell access can read credentials assigned to its own bot.
+- A typed, bounded stdio protocol carries requests/events. Bot, instance, thread and generation authority remain coordinator-owned. Worker process IDs never become host process IDs. Stop terminates that bot’s entire worker and cancels any other active threads in that worker; later work creates a fresh generation after cleanup is confirmed. Other bots are unaffected. Lost or malformed workers fail closed; there is no host execution fallback.
+- The host-side bridge exposes only `coordinate_bots` and `assignment_status` with the active turn's existing authorization and tool scope. It retains coordinator credentials outside workers. Delegation exchanges messages/results; it does not grant access to another bot's files or expand the recipient's mounts.
+- Host browser/desktop, connected apps, custom host MCP services and hooks are unavailable in this initial mode. Native tools supplied by an installed client run in its worker. Worker event narration cannot trigger host MCP health probes, credential refreshes or screen polling.
+- Background title/memory generation, permission-review helpers, cache warming/compaction and interactive account setup are not exposed by this facade. Installation, host CLI testing/discovery, automatic engine updates and guided host account setup are disabled in container mode; manage client binaries in images and account state in the assigned home. Model refresh runs inside the worker.
+- Turn paths, including attachments, skills, bot settings and tool-result paths, must resolve within that bot's declared workspaces. Missing output/settings files under a permitted root are allowed. Global attachment/skill stores are not automatically mounted or copied; unsupported paths fail explicitly.
+- The coordinator remains trusted with conversation records. This does not make conversations private from the server or isolate one Docker worker from a malicious Docker administrator/kernel.
 
-Policy and registry regression tests:
+Run the standalone server with authenticated operator clients. Container mode forces service-level loopback trust and removes ordinary session-less local-service route exemptions; desktop-managed mode is refused. A worker can appear local on Docker Desktop, so network origin is not treated as operator authority.
+
+## Verification
+
+Protocol, policy, registry, control-route and hostile-worker regression checks:
 
 ```sh
-pnpm exec vitest run server/container-workers/policy.test.ts server/harness/registry.test.ts
+pnpm exec vitest run server/container-workers server/harness/registry.test.ts
 ```
 
-Real Docker isolation and descendant-cleanup checks, without an AI account:
+The provider matrix executes all registered drivers against simulated executable protocols or controlled HTTP APIs in disposable worker processes. Those are actual driver tests, not installed-client or Docker qualification. Docker tests remain separately labelled and skipped unless explicitly enabled.
+
+After building `dist-server`, run the credential-free Docker proof:
 
 ```sh
-OMB_DOCKER_TEST=1 OMB_DOCKER=/usr/bin/docker pnpm exec vitest run server/container-workers/docker.test.ts
+node scripts/smoke-container-workers.mjs
 ```
 
-On Docker Desktop, set `OMB_DOCKER` to the Docker executable and, when needed, `OMB_DOCKER_CONFIG` to its configuration directory. The tests create their own containers and mounted directories, verify a normal stop and a forcibly killed launcher, and remove their fixtures. Their evidence is written under `.omb-scratch/verify-evidence/container-workers/`.
+This builds a local image and runs the bundled real Custom ACP driver with a synthetic executable. It checks two workers, host/sibling read/write denial, own-state writes, restart persistence, duplicate-launch ownership, packaged supervisor operation and descendant cleanup after normal and forced termination. It also runs the real coordinator HTTP/delegation proof and the all-adapter matrix in Docker using a separate image with a synthetic loopback model service. It retains credential-free evidence and Vitest JSON reports under `.omb-scratch/verify-evidence/container-workers/`. The helper resolves Docker from `PATH`, or accepts `OMB_DOCKER`, before starting the coordinator's restricted environment. Linux packaged-server CI runs this command after its normal packaged smoke; the equivalent combined Linux lane includes it too.
 
-Live Codex proof through an isolated real OpenMausBot server:
+To select an already built image or Docker installation:
 
 ```sh
-OMB_CONTAINER_AUTH_FILE=/explicitly/selected/auth.json \
-OMB_DOCKER=/usr/bin/docker \
+OMB_DOCKER_TEST=1 OMB_DOCKER=/usr/bin/docker \
+OMB_WORKER_IMAGE=omb-container-runtime:dev \
+pnpm exec vitest run server/container-workers/docker.test.ts
+```
+
+Record the source revision, image digest, platform, client versions, exact checks and any skipped/blocked cases for each qualification. Approval levels retain each client’s native semantics: Ask does not force every native command to prompt. Test an actual emitted request before claiming denial behavior. The prior Codex-only live prototype proof is historical; it does not prove the expanded implementation. Full `pnpm typecheck`, `pnpm test`, and `pnpm lint` remain required before submission.
+
+`scripts/verify-container-workers.ts` is a separate, optional authenticated Codex verifier. It requires an explicitly selected `OMB_CONTAINER_AUTH_FILE` and an `OMB_WORKER_IMAGE` containing the generic runtime plus Codex; it copies that selected account into disposable bot homes and makes live model calls. It is not part of CI or the credential-free smoke command. Its checks cover filesystem boundaries, delegation, coordinator restart, Stop followed by another turn, and denial of an actual emitted approval request. Run it only for an account and live-provider qualification you intend to perform:
+
+```sh
+OMB_CONTAINER_AUTH_FILE=/absolute/path/to/selected/auth.json \
+OMB_WORKER_IMAGE=your-codex-worker:tested-version \
 node --experimental-strip-types scripts/verify-container-workers.ts
 ```
-
-This deliberately uses the selected account and incurs model usage. It copies only the selected credential into two disposable homes; cleanup removes those copies, containers, networks and server data. The original credential and running applications are untouched. Optional `OMB_CONTAINER_MODEL` changes the default `gpt-6.1-sol` test model.
-
-The runner prints its retained, credential-free evidence file and server log. It checks native shell execution, forbidden filesystem paths, Chief-to-specialist delegation, restart/file persistence, Stop with a detached descendant, and a denied native approval. Synthetic Docker checks establish the boundary independently of a model's narration. A passing local proof is not a claim that the integration is deployed or qualified on your VPS.

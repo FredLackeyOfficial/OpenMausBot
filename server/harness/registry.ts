@@ -192,7 +192,13 @@ export class ProviderRegistry {
       };
     }
     try {
-      entry = this.containerWorkers?.entry(instanceId, entry) ?? entry;
+      if (this.containerWorkers) {
+        const live = await this.containerWorkers.create(instanceId, entry, driver);
+        const cli = cliOfRaw(entry.config);
+        if (cli) this.cliByInstance.set(instanceId, cli);
+        this.shareSnapshot(live);
+        return { instanceId, live: decorate ? decorate(live) : live };
+      }
       const config = entry.config === undefined ? driver.defaultConfig() : driver.decodeConfig(entry.config);
       // The RAW config: decodeConfig fills in the driver default, which would flag every instance as overridden.
       const rawCli = cliOfRaw(entry.config);
@@ -205,8 +211,7 @@ export class ProviderRegistry {
         config,
       })))));
       this.shareSnapshot(live);
-      const contained = this.containerWorkers?.wrap(live) ?? live;
-      return { instanceId, live: decorate ? decorate(contained) : contained };
+      return { instanceId, live: decorate ? decorate(live) : live };
     } catch (e) {
       return {
         instanceId,
@@ -352,6 +357,7 @@ export class ProviderRegistry {
   }
 
   async installRuntime(instanceId: InstanceId): Promise<InstallResult | false> {
+    if (this.containerWorkers) throw new Error("Container engines are installed in their assigned image; rebuild that image to install or update a client");
     const entry = this.byId.get(instanceId);
     if (!entry) return false;
     // A failed install changes the status too: Antigravity reports the failure as its reason.
@@ -432,6 +438,7 @@ export class ProviderRegistry {
   /** A saved CLI path that answered as another program, while the engine's own CLI is installed (the app's copy, or one
    * on PATH): the engine runs its own instead, with nobody having to Reset the path. */
   private healWrongCli(instanceId: InstanceId, snapshot: ProviderSnapshot): void {
+    if (this.containerWorkers) return;
     const driver = this.driversByKind.get(this.byId.get(instanceId)?.live?.driverKind ?? "");
     const cli = cliDefaultOf(driver);
     const saved = this.cliByInstance.get(instanceId);
@@ -445,6 +452,7 @@ export class ProviderRegistry {
 
   /** Whether this engine's CLI runs the app's own standalone copy, looked up the way its spawns look it up. */
   private appStandaloneCopy(driver: AnyProviderDriver | undefined, cli: string | undefined): boolean {
+    if (this.containerWorkers) return false;
     if (cli === undefined || !driver?.install?.standalone) return false;
     return isAppStandaloneCopy(cli, this.enginesBaseDir, standaloneLookupPath(this.enginesBaseDir));
   }
@@ -504,6 +512,7 @@ export class ProviderRegistry {
   private async describeWith(statusOf: (instance: ProviderInstance) => Promise<ProviderSnapshot>) {
     const candidatesByName = new Map<string, string[]>();
     const candidatesFor = (driver: AnyProviderDriver | undefined): string[] => {
+      if (this.containerWorkers) return [];
       const name = cliDefaultOf(driver);
       if (!name) return [];
       const cached = candidatesByName.get(name);
@@ -512,7 +521,7 @@ export class ProviderRegistry {
       candidatesByName.set(name, found);
       return found;
     };
-    const npmPresent = this.npmPresent();
+    const npmPresent = this.containerWorkers ? false : this.npmPresent();
     return Promise.all(
       this.entries().map(async (entry) => {
         const driver = this.driversByKind.get(entry.shadow?.driverKind ?? entry.live!.driverKind);
@@ -525,7 +534,7 @@ export class ProviderRegistry {
             models: { default: "", options: [] },
             capabilities: { computerMcp: false, agentsMcp: false, localComputerMcp: false },
             access: driver?.metadata.access ?? "subscription",
-            install: withServerInstall(driver?.install, npmPresent),
+            install: this.containerWorkers ? undefined : withServerInstall(driver?.install, npmPresent),
             cli: entry.shadow.cli,
             cliDefault: cliDefaultOf(driver),
             cliCandidates: candidatesFor(driver),
@@ -559,7 +568,7 @@ export class ProviderRegistry {
             backgroundText: inst.generateText !== undefined || inst.generateMemoryText !== undefined,
           },
           access: driver?.metadata.access ?? "subscription",
-          install: withServerInstall(driver?.install, npmPresent, this.appStandaloneCopy(driver, cli ?? cliDefaultOf(driver))),
+          install: this.containerWorkers ? undefined : withServerInstall(driver?.install, npmPresent, this.appStandaloneCopy(driver, cli ?? cliDefaultOf(driver))),
           authentication: inst.startAuthentication
             ? {
                 method: inst.authenticationMethod ?? (inst.getAuthentication && inst.completeAuthentication

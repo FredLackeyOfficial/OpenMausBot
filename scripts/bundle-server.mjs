@@ -31,6 +31,8 @@ const NODE_REQUIRE = {
 // Every file run as its own process.
 const ENTRY_POINTS = [
   "index.ts",
+  "container-worker.ts",
+  "container-workers/launcher.ts",
   "message-search.worker.ts",
   // the `openmausbot` command
   "openmausbot.ts",
@@ -146,6 +148,9 @@ if (existsSync(join(root, "enterprise", "server", "index.ts"))) {
 // The packaged desktop and the container launcher run this bootstrap to turn on Node's compile cache.
 // Copied, not bundled: esbuild would inline index.js into it.
 copyFileSync(join(root, "scripts", "desktop-server-entry.mjs"), join(root, "dist-server", "desktop-entry.mjs"));
+
+mkdirSync(join(root, "dist-server", "container-workers"), { recursive: true });
+copyFileSync(join(server, "container-workers", "mcp-client.mjs"), join(root, "dist-server", "container-workers", "mcp-client.mjs"));
 
 // The model catalog snapshot (server/model-catalog/catalog.ts) is read from
 // disk, not inlined: 1.5 MB of JSON has no place in index.js. The bundle looks

@@ -315,6 +315,18 @@ describe("ClaudeDriver.decodeConfig", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("keeps worker broker sockets in the provisioned private IPC filesystem", () => {
+    const previous = process.env.OMB_CONTAINER_IPC_DIR;
+    process.env.OMB_CONTAINER_IPC_DIR = "/run/omb";
+    try {
+      expect(brokerSocketCandidates("t-worker", "bot").every((path) => dirname(path) === "/run/omb")).toBe(true);
+      expect(permissionSocketPath("t-worker", "bot")).not.toBe(permissionSocketPath("t-worker", "other"));
+    } finally {
+      if (previous === undefined) delete process.env.OMB_CONTAINER_IPC_DIR;
+      else process.env.OMB_CONTAINER_IPC_DIR = previous;
+    }
+  });
+
   // Windows cannot listen on filesystem socket paths (EACCES); the fake-CLI e2e covers its pipe fallback.
   it.skipIf(process.platform === "win32")(
     "binds the next candidate when the first is unbindable, and asks round-trip on it",

@@ -1,7 +1,7 @@
 // Guided setup stays outside server/index: no server, store, or bot is started
 // until the user has saved a connection and explicitly starts the application.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -40,6 +40,7 @@ async function inspect(id: string, entry: InstanceConfig): Promise<Inspection> {
 
 /** Native CLIs own their OAuth flow; no tokens pass through our prompts. */
 export async function runSetupCli(cli: string, args: string[], environment: Record<string, string> = {}): Promise<void> {
+  if (existsSync(join(DATA_DIR, "container-workers.json"))) throw new Error("Container clients must be installed and authenticated inside their assigned image/home, not through host guided setup");
   const env: NodeJS.ProcessEnv = { ...process.env, ...environment, PATH: augmentedPath() };
   stripWorkspaceCredentialEnv(env);
   for (const key of PROVIDER_CREDENTIAL_ENV) delete env[key];
@@ -77,6 +78,7 @@ function checkStoredConfig(dataDir: string): void {
 export async function isSetupComplete(dataDir: string): Promise<boolean> {
   assertDataDir(dataDir);
   checkStoredConfig(dataDir);
+  if (existsSync(join(dataDir, "container-workers.json"))) return true;
   const cfg = loadConfig();
   const saved = cfg.defaultModelSelection;
   const instances = instanceConfigs(cfg);
@@ -206,6 +208,7 @@ export async function runSetup(
   deps: SetupDependencies = dependencies,
 ): Promise<boolean> {
   assertDataDir(options.dataDir);
+  if (existsSync(join(options.dataDir, "container-workers.json"))) throw new Error("Configure container engines in their assigned images and server configuration before starting the server");
   const lease = acquireDataDirLease(options.dataDir);
   try {
     checkStoredConfig(options.dataDir);

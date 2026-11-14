@@ -52,6 +52,7 @@ export interface InstanceRouteDeps {
   sessions: Pick<SessionRegistry, "isLive">;
   providerAuthSessions: Pick<ProviderAuthSessions, "status" | "start" | "revokeOwner" | "signOut" | "complete" | "cancel">;
   hostedModels: boolean;
+  isolateWorkers?: boolean;
   providerConfigBusy: BusyFlag;
   providerInstancesChanging: Pick<Set<string>, "add" | "delete">;
   describeInstances(): Promise<unknown>;
@@ -108,6 +109,11 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
   // One updater per executable: Claude instances can share an install, and two self-updates would race its files.
   const claudeUpdatesInFlight = new Set<string>();
   return async ({ req, res, url, path, method, auth, json, readBody }) => {
+    if (deps.isolateWorkers && (path === "/api/cli-test" || path === "/api/cli-candidates" || path.startsWith("/api/instances"))) {
+      const readOnly = method === "GET" && ["/api/instances", "/api/instances/hidden"].includes(path);
+      const workerRefresh = method === "POST" && /^\/api\/instances\/[\w.-]+\/refresh-models$/.test(path);
+      if (!readOnly && !workerRefresh) return json(res, 409, { error: "Container engine setup is managed in its assigned image and server configuration; host installation, account setup and CLI probes are disabled." });
+    }
     if (method === "GET" && path === "/api/instances/hidden") {
       const hidden = Object.entries(persistableInstanceConfigs(cfg)).filter(([, entry]) => entry.hidden === true);
       return json(res, 200, { instances: hidden.map(([instanceId, entry]) => ({ instanceId, driverKind: entry.driver, displayName: entry.displayName ?? BUILT_IN_DRIVERS.find((driver) => driver.driverKind === entry.driver)?.metadata.displayName ?? instanceId })) });
@@ -335,7 +341,7 @@ export function createInstanceRoutes(deps: InstanceRouteDeps): RouteHandler {
         }
         if (action === "refresh-models") {
           const endpoint = persistableInstanceConfigs(cfg)[instanceId];
-          if (endpoint && (isClaudeEndpoint(endpoint) || isCodexEndpoint(endpoint)) && isGatewayEndpoint(endpoint) && !hasExplicitModel(endpoint)) {
+          if (!deps.isolateWorkers && endpoint && (isClaudeEndpoint(endpoint) || isCodexEndpoint(endpoint)) && isGatewayEndpoint(endpoint) && !hasExplicitModel(endpoint)) {
             if (providerConfigBusy.get()) return json(res, 409, { error: "provider settings are already being updated" });
             providerConfigBusy.set(true);
             try {
