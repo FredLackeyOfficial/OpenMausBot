@@ -52,7 +52,14 @@ it("sends a pick on a room page to the bot that made it, and to no other member"
   const firstSend = { text: "Make this one bigger", pointed: [pointed], sendId: "room-pick-first-0001" };
   const sent = await api(`/api/groups/${group.id}/messages`, firstSend);
   expect(sent.status, JSON.stringify(sent.body)).toBe(202);
-  expect(sent.body.message).toMatchObject({ role: "user", text: "Make this one bigger", pointed: [{ appId: page.id }] });
+  expect(sent.body).toMatchObject({ ok: true, threadId: group.threadId });
+  await expect.poll(async () => (await transcript()).find((message) => message.sendId === firstSend.sendId), { timeout: 30_000 })
+    .toMatchObject({ role: "user", text: "Make this one bigger", pointed: [{ appId: page.id }] });
+  const sentMessage = (await transcript()).find((message) => message.sendId === firstSend.sendId);
+  if (sent.body.queued) {
+    expect(sent.body.queueId).toEqual(expect.any(String));
+    expect(sentMessage.queueId).toBe(sent.body.queueId);
+  } else expect(sent.body.message?.id).toBe(sentMessage.id);
   await expect.poll(() => evidence(designer.id).length, { timeout: 30_000 }).toBe(designerTurns + 1);
   await settled(designer.id);
   const prompt = JSON.stringify(evidence(designer.id).at(-1).prompt);
@@ -81,7 +88,8 @@ it("sends a pick on a room page to the bot that made it, and to no other member"
   // A retry of a pick the room already took keeps its receipt, even with the page's bot on hold now.
   const retried = await api(`/api/groups/${group.id}/messages`, firstSend);
   expect(retried.status, JSON.stringify(retried.body)).toBe(202);
-  expect(retried.body.message?.id).toBe(sent.body.message.id);
+  expect(retried.body.message?.id).toBe(sentMessage.id);
+  expect((await transcript()).filter((message) => message.sendId === firstSend.sendId)).toHaveLength(1);
 
   // A pick queued behind a busy room whose page bot goes on hold before it runs is reported, never silently lost.
   expect((await api(`/api/groups/${group.id}/holds`, { botId: designer.id, held: false })).status).toBeLessThan(300);
