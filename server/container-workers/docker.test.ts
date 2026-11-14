@@ -56,7 +56,16 @@ process.env.FAKE_ACP_RPC_APPEND_FILE=${JSON.stringify(join(worker.workspaces[0],
 if(process.argv.length===2){
 const fixtureRead=(path)=>{try{fixtureFs.readFileSync(path);return true;}catch{return false;}};
 const fixtureWrite=(path)=>{try{fixtureFs.writeFileSync(path,"forbidden");return true;}catch{return false;}};
+const cgroupValue=(...paths)=>fixtureFs.readFileSync(paths.find(path=>fixtureFs.existsSync(path))??paths[0],'utf8').trim();
+const cgroupV2=fixtureFs.existsSync('/sys/fs/cgroup/cgroup.controllers');
+const [cpuQuota,cpuPeriod]=cgroupV2?cgroupValue('/sys/fs/cgroup/cpu.max').split(' ').map(Number):[
+Number(cgroupValue('/sys/fs/cgroup/cpu/cpu.cfs_quota_us','/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_quota_us')),
+Number(cgroupValue('/sys/fs/cgroup/cpu/cpu.cfs_period_us','/sys/fs/cgroup/cpu,cpuacct/cpu.cfs_period_us'))];
+const kernelLimits={version:cgroupV2?2:1,cpuQuota,cpuPeriod,
+memoryBytes:Number(cgroupValue(cgroupV2?'/sys/fs/cgroup/memory.max':'/sys/fs/cgroup/memory/memory.limit_in_bytes')),
+pids:Number(cgroupValue(cgroupV2?'/sys/fs/cgroup/pids.max':'/sys/fs/cgroup/pids/pids.max'))};
 const report={uid:process.getuid!(),home:process.env.HOME,temp:process.env.TMPDIR,data:process.env.OMB_DATA_DIR,
+kernelLimits,
 siblingRead:fixtureRead(${JSON.stringify(join(workers[other].home,"canary"))}),siblingWrite:fixtureWrite(${JSON.stringify(join(workers[other].home,"forbidden"))}),
 rootWrite:fixtureWrite("/opt/omb/runtime/forbidden"),
 coordinatorRead:fixtureRead(${JSON.stringify(policyPath)}),coordinatorWrite:fixtureWrite(${JSON.stringify(join(root,"coordinator","forbidden"))}),
@@ -101,6 +110,10 @@ ${fake}`);
       const report = JSON.parse(readFileSync(join(worker.workspaces[0], "report.json"), "utf8"));
       expect(report).toMatchObject({ uid: workerUid, home: "/home/agent", temp: "/tmp", data: "/home/agent/.openmausbot", other: false, policy: false, docker: false, bundle: true, modules: false, operatorSecret: null, siblingRead: false, siblingWrite: false, coordinatorRead: false, coordinatorWrite: false, source: false, rootWrite: false });
       expect(report.hostProc).toContain("docker-init");
+      expect(report.kernelLimits).toMatchObject({ memoryBytes: 1073741824, pids: 128 });
+      expect(report.kernelLimits.cpuQuota).toBeGreaterThan(0);
+      expect(report.kernelLimits.cpuPeriod).toBeGreaterThan(0);
+      expect(report.kernelLimits.cpuQuota / report.kernelLimits.cpuPeriod).toBe(1);
       const generations = readdirSync(worker.temp).filter(name => name.startsWith("omb-run-"));
       expect(generations).toHaveLength(1);
       expect(readFileSync(join(worker.temp, generations[0], "temp-canary"), "utf8")).toBe("yes");

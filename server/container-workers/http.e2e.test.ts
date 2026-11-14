@@ -125,7 +125,7 @@ ${fake}`);
     const direct = await control("messages", "--bot", specialist.id, "--task", specialist.activeTaskId, "--limit", "20");
     expect(direct.messages.some((message: any) => message.role === "bot" && message.text === "HTTP_WORKER_OK"), JSON.stringify(direct)).toBe(true);
     const report = (id: string) => JSON.parse(readFileSync(join(workers[id].workspaces[0], "report.json"), "utf8"));
-    expect(report(specialist.id)).toMatchObject({ uid: 1000, home: "/home/agent", temp: "/tmp", count: 1, coordinatorRead: false, siblingRead: false, dockerSocket: false });
+    expect(report(specialist.id)).toMatchObject({ uid: workerUid, home: "/home/agent", temp: "/tmp", count: 1, coordinatorRead: false, siblingRead: false, dockerSocket: false });
     expect(report(specialist.id).pid1).toContain("docker-init");
     proof.direct = direct.messages; proof.directReport = report(specialist.id);
     const callsPath = join(workers[chief.id].workspaces[0], "calls.json");
@@ -156,7 +156,7 @@ ${fake}`);
     const ids = run("ps", "-q", "--filter", policyFilter).split(/\s+/).filter(Boolean);
     expect(ids).toHaveLength(2);
     const inspections = ids.map(id => JSON.parse(run("inspect", id))[0]).map(item => ({ id: item.Id, user: item.Config.User, readonlyRoot: item.HostConfig.ReadonlyRootfs, network: item.HostConfig.NetworkMode, mounts: item.Mounts.map((mount: any) => ({ source: mount.Source, target: mount.Destination })) }));
-    for (const inspect of inspections) expect(inspect).toMatchObject({ user: "1000:1000", readonlyRoot: true, network: "none" });
+    for (const inspect of inspections) expect(inspect).toMatchObject({ user: `${workerUid}:${workerGid}`, readonlyRoot: true, network: "none" });
     Object.assign(proof, { passed: true, delegated: delegated.messages, handoffs, reports: [report(chief.id), report(specialist.id)], inspections });
   } finally {
     const evidence = fileURLToPath(new URL("../../.omb-scratch/verify-evidence/container-workers", import.meta.url));
