@@ -97,11 +97,13 @@ ${fake}`);
     child = spawn(process.execPath, verificationServerArgs(env), { cwd: fileURLToPath(new URL("../..", import.meta.url)), env, stdio: ["ignore", log, log] });
     closeSync(log);
     await expect.poll(async () => { try { return (await fetch(`${url}/api/health`)).ok; } catch { return false; } }, { timeout: 30_000 }).toBe(true);
+    expect(specialist.activeTaskId).toEqual(expect.any(String));
+    expect((await api("GET", `/api/threads/${specialist.activeTaskId}/messages`)).messages).toEqual(expect.any(Array));
     const paths: Array<[string, string, unknown?]> = [
-      ["GET", "/api/bots"], ["GET", `/api/threads/${specialist.threadId}/messages`], ["GET", "/api/attachments/other.png"],
+      ["GET", "/api/bots"], ["GET", `/api/threads/${specialist.activeTaskId}/messages`], ["GET", "/api/attachments/other.png"],
       ["POST", `/api/bots/${specialist.id}/tasks`, { title: "Unauthorized" }],
       ["POST", `/api/bots/${specialist.id}/messages/guarded`, { text: "Unauthorized" }],
-      ["POST", `/api/threads/${specialist.threadId}/respond`, { requestId: "forged", decision: "allow" }],
+      ["POST", `/api/threads/${specialist.activeTaskId}/respond`, { requestId: "forged", behavior: "allow" }],
       ["GET", `/api/bots/${specialist.id}/requests/forged`],
       ["POST", `/api/bots/${specialist.id}/requests/forged/interrupt`, {}],
       ["DELETE", `/api/bots/${specialist.id}/queue/forged`],
