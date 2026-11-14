@@ -69,7 +69,7 @@ describe("independent container mount and authority boundaries", () => {
     expect(readFileSync(file, "utf8")).toBe("synthetic-file");
   });
 
-  it("refuses a Unix socket as a mount root", async () => {
+  it.skipIf(process.platform === "win32")("refuses a Unix socket as a mount root", async () => {
     const f = fixture();
     const socket = join(f.root, "socket");
     const server = createServer();
@@ -83,7 +83,7 @@ describe("independent container mount and authority boundaries", () => {
   });
 
 
-  it.skipIf(!existsSync("/var/run"))("refuses canonical aliases of administrative socket directories", () => {
+  it.skipIf(process.platform === "win32" || !existsSync("/var/run"))("refuses canonical aliases of administrative socket directories", () => {
     const f = fixture();
     f.workers.alice.workspaces = [realpathSync("/var/run")];
     f.refused();
@@ -105,7 +105,7 @@ describe("independent container mount and authority boundaries", () => {
   it.each(["home", "temp", "workspace"])("refuses symlink %s roots", (kind) => {
     const f = fixture();
     const link = join(f.root, "symlink");
-    symlinkSync(f.workers.alice.workspaces[0]!, link);
+    symlinkSync(f.workers.alice.workspaces[0]!, link, process.platform === "win32" ? "junction" : "dir");
     if (kind === "workspace") f.workers.alice.workspaces = [link];
     else f.workers.alice[kind as "home" | "temp"] = link;
     f.refused();
@@ -122,7 +122,7 @@ describe("independent container mount and authority boundaries", () => {
     f.refused();
   });
 
-  it.each(["/", "/home/agent", "/home/agent/nested", "/opt/omb", "/opt/omb/nested", "/proc", "/sys", "/dev", "/tmp"])(
+  it.skipIf(process.platform === "win32").each(["/", "/home/agent", "/home/agent/nested", "/opt/omb", "/opt/omb/nested", "/proc", "/sys", "/dev", "/tmp"])(
     "refuses the reserved workspace destination %s", (destination) => {
       const f = fixture();
       virtualDirectories.add(destination);

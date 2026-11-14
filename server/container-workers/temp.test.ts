@@ -9,7 +9,7 @@ const roots: string[] = [];
 const root = () => { const value = mkdtempSync(join(tmpdir(), "omb-temp-owner-")); roots.push(value); return value; };
 afterEach(() => { vi.restoreAllMocks(); vi.mocked(chownSync).mockReset(); for (const path of roots.splice(0)) rmSync(path, { recursive: true, force: true }); });
 
-it("assigns only the fresh Linux temp directory to the non-root worker and keeps it private", () => {
+it.skipIf(process.platform === "win32")("assigns only the fresh Linux temp directory to the non-root worker and keeps it private", () => {
   vi.spyOn(process, "getuid").mockReturnValue(0);
   const parent = root();
   const directory = createWorkerTemp({ temp: parent, user: "12345:12345" }, "linux");
@@ -18,7 +18,7 @@ it("assigns only the fresh Linux temp directory to the non-root worker and keeps
   expect(statSync(directory).mode & 0o777).toBe(0o700);
 });
 
-it("refuses mismatched Linux non-root ownership without widening permissions", () => {
+it.skipIf(process.platform === "win32")("refuses mismatched Linux non-root ownership without widening permissions", () => {
   vi.spyOn(process, "getuid").mockReturnValue(54321);
   const parent = root();
   expect(() => createWorkerTemp({ temp: parent, user: "12345:12345" }, "linux")).toThrow(/Cannot assign private worker temp/);
@@ -26,7 +26,7 @@ it("refuses mismatched Linux non-root ownership without widening permissions", (
   expect(readdirSync(parent)).toEqual([]);
 });
 
-it("removes only the new directory if Linux ownership assignment fails", () => {
+it.skipIf(process.platform === "win32")("removes only the new directory if Linux ownership assignment fails", () => {
   vi.spyOn(process, "getuid").mockReturnValue(0);
   vi.mocked(chownSync).mockImplementation(() => { throw new Error("EPERM"); });
   const parent = root();

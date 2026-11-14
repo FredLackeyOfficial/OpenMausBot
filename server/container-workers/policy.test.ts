@@ -40,7 +40,7 @@ it("refuses overlapping mounts, symlink roots, shared engine identities, and pol
     (f: ReturnType<typeof fixture>) => { f.workers.bob!.home = f.workers.alice!.home; },
     (f: ReturnType<typeof fixture>) => { f.workers.bob!.instanceId = "alice"; },
     (f: ReturnType<typeof fixture>) => { f.workers.bob!.home = f.root; },
-    (f: ReturnType<typeof fixture>) => { const link = join(f.root, "link"); symlinkSync(f.workers.bob!.home, link); f.workers.bob!.home = link; },
+    (f: ReturnType<typeof fixture>) => { const link = join(f.root, "link"); symlinkSync(f.workers.bob!.home, link, process.platform === "win32" ? "junction" : "dir"); f.workers.bob!.home = link; },
   ]) {
     const f = fixture(); mutation(f); f.save();
     expect(() => readWorkerPolicy(f.path)).toThrow();
@@ -130,12 +130,12 @@ it("never mounts the operator's explicitly configured Docker credentials", () =>
   writeFileSync(f.path, JSON.stringify({ workers: f.workers, dockerConfig: f.workers.alice!.workspaces[0] }));
   expect(() => readWorkerPolicy(f.path)).toThrow("administrative");
   const linked = join(f.root, "docker-config-link");
-  symlinkSync(f.workers.alice!.home, linked);
+  symlinkSync(f.workers.alice!.home, linked, process.platform === "win32" ? "junction" : "dir");
   writeFileSync(f.path, JSON.stringify({ workers: f.workers, dockerConfig: linked }));
   expect(() => readWorkerPolicy(f.path)).toThrow("administrative");
 });
 
-it("protects a policy reached through a symlink from worker writes", () => {
+it.skipIf(process.platform === "win32")("protects a policy reached through a symlink from worker writes", () => {
   const f = fixture();
   const target = join(f.workers.alice!.workspaces[0]!, "policy.json");
   writeFileSync(target, JSON.stringify({ workers: f.workers }));

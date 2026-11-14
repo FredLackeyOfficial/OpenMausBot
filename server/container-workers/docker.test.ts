@@ -11,7 +11,7 @@ import { waitForExit } from "../testing/cleanup.ts";
 import { createContainerProvider } from "./provider.ts";
 import { spawnContainerWorker } from "./transport.ts";
 
-it.skipIf(process.env.OMB_DOCKER_TEST !== "1")("runs the bundled provider in actual Docker with isolated files, concurrency, restart and descendant cleanup", async () => {
+it.skipIf(process.platform === "win32" || process.env.OMB_DOCKER_TEST !== "1")("runs the bundled provider in actual Docker with isolated files, concurrency, restart and descendant cleanup", async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "omb-docker-proof-")));
   const workerUid = process.platform === "linux" && process.getuid?.() ? process.getuid!() : 1000;
   const workerGid = process.platform === "linux" && process.getuid?.() ? process.getgid!() : 1000;

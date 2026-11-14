@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { waitForExit } from "../testing/cleanup.ts";
 
 const roots: string[] = [];
@@ -42,6 +42,8 @@ else if(args[0]==='inspect'){const run=JSON.parse(fs.readFileSync(file,'utf8').s
   return { child, record, worker, output: () => output, errors: () => errors };
 }
 
+// Supported coordinators use POSIX executable fixtures and graceful process signals.
+describe.skipIf(process.platform === "win32")("POSIX container supervisor", () => {
 it("launches only the image runtime with private mounts and forwards RPC without inheriting operator credentials", async () => {
   const f = fixture();
   await expect.poll(() => f.output() || f.errors(), { timeout: 10_000 }).toBe("ready\n");
@@ -111,4 +113,5 @@ it("marks an unexpected supervisor exception as unconfirmed cleanup", async () =
   expect(f.child.signalCode).toBeNull();
   expect(f.child.exitCode).toBe(70);
   expect(f.errors()).toContain("synthetic unexpected supervisor failure");
+});
 });

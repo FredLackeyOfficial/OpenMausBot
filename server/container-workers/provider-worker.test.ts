@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AnyProviderDriver, ProviderInstance, RuntimeEvent, RuntimeEventListener, SendTurnInput } from "../contracts.ts";
@@ -56,7 +57,7 @@ describe("provider worker lifecycle", () => {
   });
   it("assigns Codex direct endpoints the worker home without accepting a coordinator path", async () => {
     const { driver } = await fixture("codex", { OPENMAUSBOT_CODEX_API_KEY: "synthetic-endpoint-key" });
-    expect(driver.create).toHaveBeenCalledWith(expect.objectContaining({ environment: { OPENMAUSBOT_CODEX_API_KEY: "synthetic-endpoint-key", CODEX_HOME: `${process.env.HOME}/.codex` } }));
+    expect(driver.create).toHaveBeenCalledWith(expect.objectContaining({ environment: { OPENMAUSBOT_CODEX_API_KEY: "synthetic-endpoint-key", CODEX_HOME: join(process.env.HOME!, ".codex") } }));
   });
   it("holds new turns until supervisor cleanup is confirmed", async () => {
     const { facade, children, holdCleanup, finishCleanup } = await fixture();

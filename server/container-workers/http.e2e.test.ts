@@ -11,7 +11,7 @@ import { readHandoffs } from "../testing/handoff-rows.ts";
 
 // This is a foreground-owned coordinator with a throwaway home, paired fixture
 // session and synthetic ACP executable. It never uses a developer's running app.
-it.skipIf(process.env.OMB_DOCKER_TEST !== "1")("authenticates the real coordinator and delegates between actual contained provider workers", async () => {
+it.skipIf(process.platform === "win32" || process.env.OMB_DOCKER_TEST !== "1")("authenticates the real coordinator and delegates between actual contained provider workers", async () => {
   const workerUid = process.platform === "linux" && process.getuid?.() ? process.getuid!() : 1000;
   const workerGid = process.platform === "linux" && process.getuid?.() ? process.getgid!() : 1000;
   const docker = process.env.OMB_DOCKER ?? "/usr/bin/docker";
