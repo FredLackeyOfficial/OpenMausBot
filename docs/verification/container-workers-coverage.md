@@ -71,8 +71,8 @@ These are locally inspected image IDs, not pullable registry digests. No image w
 | --- | --- | --- |
 | Prior v3 production runtime (Stop 1/1) | `omb-container-runtime:qualification-v3` | `sha256:1ede0b20be2aef463aec02752ae70af0da0076a6ff648497e4fcad07c60fa819` |
 | Prior v3 matrix wrapper (31/31) | `omb-container-runtime:matrix-v3` | `sha256:0ce277d6f4a84904d0d54b146d5839f0646ac0decf8227d2bbf6a93e1472487c` |
-| Latest production smoke (2/2) | `omb-container-runtime:ci` | `sha256:829fe0245b8ea77691001ed5a780f9b6d522e6fe3e674bf11a83e94c5c51b6bc` |
-| Latest synthetic matrix smoke (31/31) | `omb-container-runtime:matrix-ci` | `sha256:8fd427a9cb3878a0931274da0950ae2f48b5e42b6162104ae73d22f7c6be322f` |
+| Latest production smoke (2/2) | `omb-container-runtime:ci` | `sha256:17acd39c88540aac78200536e489d02c6ee2700f9ae8aa857b3c97f31b0e4dd5` |
+| Latest synthetic matrix smoke (31/31) | `omb-container-runtime:matrix-ci` | `sha256:8cf9c40ae8e09a0e5234c4d72025367af4d46ad8b857222f982f73dd0e41b83f` |
 | Native seven-client tool worker | `omb-container-native:qualification-v2` | `sha256:be000d819ee812428aa3585f8315aeac84e1e9803f943b4d3d82c228a6e4ff69` |
 | Extra official native clients + Vibe | `omb-container-extra-native:qualification` | `sha256:fcc6d8068723e49c27a7d976346638ce4cb2c03a687cc80b02fb1c749e25e36b` |
 
@@ -94,7 +94,7 @@ pnpm exec vitest run server/container-workers/provider-matrix.test.ts
 pnpm exec vitest run server/container-workers/launcher.test.ts server/container-workers/temp.test.ts
 ```
 
-Docker JSON evidence is written under `.omb-scratch/verify-evidence/container-workers/`: `docker-provider-isolation.json` and `http-coordinator.json`. The latest retained records correspond to the CI-tagged images after the broken-pipe/exit-guard fix, superseding earlier v3 and earlier CI records at those paths. `docker-smoke-vitest.json` records 2/2 passing tests; `docker-matrix-vitest.json` records 31/31. Keep the matrix test output alongside these artifacts and record the source commit, dirty-worktree status and inspected image IDs for each new run. The original qualification ran before the final integration commit; its image IDs, source tests and retained task logs identify that snapshot. Rebuilding does not preserve those image IDs automatically.
+Docker JSON evidence is written under `.omb-scratch/verify-evidence/container-workers/`: `docker-provider-isolation.json` and `http-coordinator.json`. The latest retained records correspond to the CI-tagged images after the broken-pipe/exit-guard fix and extraction of unchanged Claude broker-path helpers to satisfy the existing source-size limit, superseding earlier v3 and earlier CI records at those paths. `docker-smoke-vitest.json` records 2/2 passing tests; `docker-matrix-vitest.json` records 31/31. Keep the matrix test output alongside these artifacts and record the source commit, dirty-worktree status and inspected image IDs for each new run. The original qualification ran before the final integration commit; its image IDs, source tests and retained task logs identify that snapshot. Rebuilding does not preserve those image IDs automatically.
 
 Native installation/tool evidence is retained in the task's local qualification bundle rather than checked into the product repository. Relative artifact names are `native-qualification/npm-release-metadata.json`, `npm-install-results.jsonl`, `startup-probes-exec.jsonl`, `extra-install-results.json`, `extra-startup-probes.jsonl`, `muse-startup-probe.jsonl`, and `native-tools/README.md`, `SUMMARY.json`, `v2-results.jsonl`. The native bundle includes pinned installation recipes, fetched installer hashes, fake-provider scripts, and `native-tools/run.sh`; its Codex explicit escalation evidence is separately identified in SUMMARY.json. These developer qualification results are not executed by the repository smoke script and should be rerun on a selected release before extending the support claim.
 

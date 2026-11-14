@@ -1,17 +1,18 @@
 // Claude Code over stream-json both ways: prompt on stdin, one retained CLI process per thread,
 // each turn settled by the CLI's own `result` frame.
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, dirname, isAbsolute, normalize } from "node:path";
 
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
-import { workerIpcDirectory } from "../container-workers/ipc.ts";
+import { brokerSocketCandidates, permissionSocketPath } from "./claude-broker-paths.ts";
+export { brokerSocketCandidates, permissionSocketPath } from "./claude-broker-paths.ts";
 import { openStartupModelCatalog, unconfirmedModelCatalog, writeStartupModelCache } from "../startup-model-catalog.ts";
 import { writeFileAtomicIfChanged } from "../atomic.ts";
 import { augmentedPath, findCliCandidates } from "../env-path.ts"; import { BASH_MAX_TIMEOUT_MS } from "../system-prompt.ts";
-import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
+import { describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
 import { cliToLaunch, cliVersionProbe } from "../cli-version-probe.ts";
 import { claudeAuthStatus } from "./claude-auth-status.ts";
 import { projectMcpServers } from "./claude-project-mcp.ts";
@@ -422,33 +423,6 @@ export function claudeHookSettings(helperPath: string, platform: NodeJS.Platform
     : { type: "command", command: [process.execPath, helperPath].map(path => `'${path.replace(/'/g, "'\\''")}'`).join(" "), timeout: 5 };
   const entry = [{ matcher: "", hooks: [hook] }];
   return { PostToolUse: entry, PostToolUseFailure: entry, PreCompact: entry, SessionStart: entry, Stop: entry };
-}
-
-export function permissionSocketPath(threadId: string, botId?: string) {
-  // Half the tag digests the full bot+thread key: Windows named pipes share one global namespace
-  // and are never unlinked, and 8 chars keeps POSIX paths under the 104-byte sun_path limit.
-  const key = botId ? `${botId}\0${threadId}` : threadId;
-  const prefix = threadId.replace(/[^\w-]/g, "").slice(0, 4);
-  const digest = createHash("sha256").update(key).digest("hex").slice(0, 4);
-  return brokerSocketPath(workerIpcDirectory() ?? DATA_DIR, `${prefix}${digest}`);
-}
-
-/** Broker bind paths, in order. Windows pipe names are never unlinkable (a hung child can hold one
- * for minutes), and macOS rejects socket paths past `sun_path`, hence the short temp fallback. */
-export function brokerSocketCandidates(threadId: string, botId?: string): string[] {
-  const base = permissionSocketPath(threadId, botId);
-  if (process.platform !== "win32") {
-    const scope = createHash("sha256")
-      .update(`${DATA_DIR}\0${process.pid}\0${botId ?? ""}\0${threadId}`)
-      .digest("hex")
-      .slice(0, 16);
-    return [base, join(workerIpcDirectory() ?? tmpdir(), `omb-perm-${scope}.sock`)];
-  }
-  return [
-    base,
-    `${base}-${randomBytes(3).toString("hex")}`,
-    `${base}-${randomBytes(3).toString("hex")}`,
-  ];
 }
 
 export async function createPermissionBroker(opts: {
