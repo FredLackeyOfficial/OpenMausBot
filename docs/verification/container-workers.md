@@ -53,6 +53,28 @@ Select this instance for the assigned bot and set its working directory within i
 
 Optional `dockerConfig` and `context` select an operator-owned Docker configuration/context. Bind source paths must exist on the Docker daemon's host. This is not an SSH file-transfer implementation. The tested local path uses a colocated coordinator and Docker daemon, including Docker Desktop's host-file sharing; a remote daemon needs separately provisioned matching directories.
 
+### Rootless Docker on Linux
+
+Run the rootless daemon under a dedicated, unprivileged host account with subordinate UID/GID ranges. That account needs no membership in the rootful Docker group or access to the rootful Docker socket. Manage its daemon through the user's systemd manager on a cgroup v2 host, with `cpu`, `memory` and `pids` controllers delegated to it. Check that `docker info` reports the intended rootless daemon and the `systemd` cgroup driver. Rootless Docker can ignore resource flags when cgroup support is unavailable; declared container settings alone do not establish enforcement. See [Docker's rootless resource requirements](https://docs.docker.com/engine/security/rootless/tips/#limiting-resources).
+
+The coordinator must share the daemon's user namespace so its filesystem ownership operations use the same IDs as the workers. Rootless container UID 0 maps to the daemon owner's unprivileged host UID; nonzero container IDs map into subordinate host ranges. A host-owned directory therefore appears root-owned inside the container. Running an ordinary host process with the same numeric UID as `worker.user` does not provide matching ownership. See [Docker's UID/GID mapping](https://docs.docker.com/engine/security/rootless/uid-gid-mapping/).
+
+As the daemon owner, enter its existing user and mount namespaces to launch the coordinator. Never invoke this command as host root. From the application directory, with the coordinator's data directory already configured and provisioned for that account:
+
+```sh
+nsenter -U --preserve-credentials -m \
+  -t "$(cat "${XDG_RUNTIME_DIR:?}/docker.pid")" \
+  -- node dist-server/index.js
+```
+
+This follows [Docker's namespace entry procedure](https://docs.docker.com/engine/security/rootless/troubleshoot/#tips-for-debugging), selecting user and mount namespaces while retaining the coordinator's host network namespace. Verify that the target PID belongs to the dedicated daemon and that namespace UID/GID 0 map to its nonzero host IDs. The coordinator sees namespace UID 0; its host identity remains unprivileged. Workers retain a nonzero policy user such as `1000:1000`, dropped capabilities and no-new-privileges.
+
+Provision each bot's distinct home, temp and workspace directories using that same namespace and the worker's configured UID/GID. Keep the coordinator data and trusted mount parents outside those mounts. The supervisor creates each private mode-0700 temp generation and assigns its ownership within the matching namespace; it also needs to remove worker-owned contents during cleanup. Do not substitute world-writable directories for correct ownership. Worker images still contain the copied runtime bundle on a read-only root filesystem; neither the host source checkout nor the coordinator's home is mounted into a worker.
+
+Set an absolute `dockerConfig` in the policy, outside every bot mount, and select the dedicated rootless context explicitly. For the smoke helper, pass the same directory through `OMB_DOCKER_CONFIG` and set its current context to that daemon. Clear conflicting ambient Docker endpoint variables before running build/test commands. The supervisor deliberately excludes inherited `DOCKER_HOST` and other Docker environment overrides, so relying on those variables can send verification commands and supervisors to different daemons.
+
+Run the Docker verification below from the same namespace arrangement. Require the worker's actual kernel limits to report 1 GiB memory, 128 PIDs and a CPU quota/period ratio of 1. Missing or unlimited controllers fail qualification. Rootless mode does not alter network authorization: offline workers use `none`; online clients need their own explicit network and provisioned account, with separate operator enforcement for Internet, LAN and host egress restrictions.
+
 ## Boundary and deliberate limitations
 
 - Home maps to `/home/agent`; each worker generation gets its own temporary subdirectory mounted at `/tmp`; workspace paths retain their absolute names. A private, size-limited `/run/omb` tmpfs holds IPC sockets; `/tmp` and `TMPDIR` remain on the configured host bind. This avoids Docker Desktop shared-filesystem socket permission limitations without weakening broker permissions. Home/workspace state persists. The root filesystem and runtime are read-only; containers run without root, added capabilities, privilege escalation or the Docker socket, and with CPU/memory/process limits.

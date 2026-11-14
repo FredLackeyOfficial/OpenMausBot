@@ -48,6 +48,8 @@ The executable adapters use synthetic protocol clients. All nine API adapters us
 - `server/container-workers/docker.test.ts` inspects actual container mounts and hardening, tests two workers' filesystem isolation, confirms persistent state and verifies Stop, recreation and detached-process cleanup. It also runs a copied supervisor outside the source tree.
 - `server/container-workers/http.e2e.test.ts` runs an isolated real coordinator with packaged workers. It tests authenticated turns, unauthorized HTTP access, recipient-workspace delegation and refusal of cross-bot shared-folder delegation.
 
+The Docker isolation fixture also reads the running worker's kernel cgroup limits and records them as `report.kernelLimits` for each worker in `docker-provider-isolation.json`. It requires 1073741824 bytes of memory, 128 PIDs and a positive CPU quota/period ratio of 1. It reads cgroup v2 files, with cgroup v1 controller-file fallbacks. Missing files or unlimited values fail the proof; inspecting Docker's requested `HostConfig` values is insufficient. These checks verify configured kernel limits without deliberately exhausting memory or processes.
+
 The Docker fixtures use synthetic executables and disposable data. Native tools, provider accounts and host integrations outside those fixtures are not covered by these checks.
 
 ## Reproduction
@@ -66,6 +68,8 @@ OMB_DOCKER=/absolute/path/to/docker node scripts/smoke-container-workers.mjs
 ```
 
 `OMB_DOCKER_CONFIG` optionally selects an owned Docker CLI configuration. The smoke command writes `docker-provider-isolation.json`, `http-coordinator.json`, `docker-smoke-vitest.json` and `docker-matrix-vitest.json` under the ignored `.omb-scratch/verify-evidence/container-workers/` directory. Keep those run-specific artifacts outside source commits. Record the exact source revision and whether the checkout was modified, inspected image IDs, platform, command results and skipped cases alongside them.
+
+For rootless Linux, follow the [namespace and ownership arrangement](container-workers.md#rootless-docker-on-linux) and run the fixtures as the daemon owner inside the daemon's user and mount namespaces. Record the host-to-namespace UID/GID mapping, rootless daemon selection, cgroup driver/version and observed kernel limits. A pass on this arrangement does not establish support for a coordinator outside the daemon's user namespace or for an installation without delegated resource controllers.
 
 ## Qualification beyond these tests
 
