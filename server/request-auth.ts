@@ -580,6 +580,8 @@ export interface ResolveOptions {
   features?: { sharedComputers?: boolean };
   /** Absent is `owner`; ignored while loopbackMutationToken is in force. */
   loopbackTrust?: LoopbackTrust;
+  /** Container workers may appear as loopback peers; refuse the legacy Slack routes as well as owner access. */
+  isolateWorkers?: boolean;
   /** Under `service`: a per-launch secret from `openmausbot serve` over stdin (never env, which other children read); it opens only pairing codes. */
   cliOwnerToken?: string;
   /** resolveLoopbackTrust's `localBrowsers`: a development server lets this machine's browsers use loopback trust. */
@@ -702,7 +704,7 @@ export function resolveRequestAuth(req: IncomingMessage, options: ResolveOptions
         return { auth: { kind: "loopback", scopes: LOOPBACK_SCOPES }, status: 401, error: "" };
       }
       // On a shared server "local" includes every bot's shell: default deny outside SERVICE_ALLOW.
-      if (!serviceAllowed(method, path)) {
+      if (!serviceAllowed(method, path) || (options.isolateWorkers && !path.startsWith("/api/internal/") && !(method === "GET" && path === "/api/health"))) {
         return deny(403, "forbidden: on this shared server a local request without a session may only use the service routes; sign in to change settings, people or access");
       }
       return { auth: { kind: "loopback", scopes: SERVICE_SCOPES, trust: "service" }, status: 401, error: "" };

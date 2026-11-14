@@ -5,6 +5,7 @@ import { installStandaloneEngine, isAppStandaloneCopy, type StandaloneInstalled 
 import { pinnedNpmVersion } from "../engine-versions.ts";
 import { withEngineMemory } from "../engine-memory.ts";
 import { withEngineHomes } from "../engine-homes/engine-homes.ts";
+import type { ContainerWorkers } from "../container-workers/policy.ts";
 import { withLocalContext } from "../drivers/local-inject.ts";
 import { engineStatusFile, snapshotFrom } from "./engine-status-file.ts";
 import { withUnaskedStops } from "./unasked-stop.ts";
@@ -125,12 +126,14 @@ export class ProviderRegistry {
   private readonly npmPresent: () => boolean;
   private readonly status: ReturnType<typeof engineStatusFile> | null;
   private readonly installStandalone: InstallStandalone;
+  private readonly containerWorkers?: ContainerWorkers;
 
   constructor(
     drivers: readonly AnyProviderDriver[],
-    options: { enginesBaseDir?: string; npmAvailable?: () => boolean; statusFile?: string; installStandalone?: InstallStandalone } = {},
+    options: { enginesBaseDir?: string; npmAvailable?: () => boolean; statusFile?: string; installStandalone?: InstallStandalone; containerWorkers?: ContainerWorkers } = {},
   ) {
     this.enginesBaseDir = options.enginesBaseDir;
+    this.containerWorkers = options.containerWorkers;
     this.npmPresent = options.npmAvailable ?? npmAvailable;
     this.status = options.statusFile ? engineStatusFile(options.statusFile) : null;
     this.installStandalone = options.installStandalone ?? installStandaloneEngine;
@@ -189,6 +192,7 @@ export class ProviderRegistry {
       };
     }
     try {
+      entry = this.containerWorkers?.entry(instanceId, entry) ?? entry;
       const config = entry.config === undefined ? driver.defaultConfig() : driver.decodeConfig(entry.config);
       // The RAW config: decodeConfig fills in the driver default, which would flag every instance as overridden.
       const rawCli = cliOfRaw(entry.config);
@@ -201,7 +205,8 @@ export class ProviderRegistry {
         config,
       })))));
       this.shareSnapshot(live);
-      return { instanceId, live: decorate ? decorate(live) : live };
+      const contained = this.containerWorkers?.wrap(live) ?? live;
+      return { instanceId, live: decorate ? decorate(contained) : contained };
     } catch (e) {
       return {
         instanceId,
