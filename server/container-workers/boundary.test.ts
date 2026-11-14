@@ -31,7 +31,7 @@ function fixture() {
   const makeWorker = (name: string) => {
     const directories = ["home", "temp", "work"].map((kind) => join(root, name, kind));
     for (const directory of directories) mkdirSync(directory, { recursive: true });
-    return { instanceId: name, image: "boundary-fixture", command: ["fixture-engine"],
+    return { instanceId: name, image: "boundary-fixture",
       home: directories[0]!, temp: directories[1]!, workspaces: [directories[2]!], network: "none", user: "1000:1000" };
   };
   const workers = { alice: makeWorker("alice"), bob: makeWorker("bob") };

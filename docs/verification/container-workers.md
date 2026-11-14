@@ -2,7 +2,7 @@
 
 An optional `container-workers.json` in the coordinator's data directory assigns each engine instance to exactly one bot and Docker image. The complete engine adapter runs inside that bot's container: client creation, model probes, native protocols, ACP filesystem callbacks, API-backed tool loops, and helper processes. The coordinator retains conversations, user authentication, approval routing and Docker authority.
 
-This is a development integration awaiting upstream design review. Generic routing and simulated protocol coverage are distinct from qualification of installed clients and authenticated accounts. The adapter matrix must retain those distinctions; a missing binary or credential is not a passing test.
+Synthetic protocol coverage is distinct from qualification of installed clients and authenticated accounts. The [coverage matrix](container-workers-coverage.md) describes the reproducible checks and their limits; a missing binary or credential is not a passing test.
 
 ## Build and configuration
 
@@ -47,7 +47,7 @@ Register the corresponding instance in the ordinary server configuration:
 }
 ```
 
-The driver is preserved. The same mechanism accepts Claude, Pi, Muse Code, named ACP clients, `customAcp`, and API adapters from the built-in registry. Their normal driver-specific configuration applies **inside the image**. The prototype's old `command` policy field is accepted for migration but no longer selects an executable; use the instance's `config.cli` instead.
+The driver is preserved. The same mechanism accepts Claude, Pi, Muse Code, named ACP clients, `customAcp`, and API adapters from the built-in registry. Their normal driver-specific configuration applies **inside the image**. Configure a client executable through the instance’s `config.cli`; the worker policy does not select an executable.
 
 Select this instance for the assigned bot and set its working directory within its declared workspaces. Every configured engine needs an assignment; unassigned engines become unavailable. Sharing one engine instance between bots is refused. Restart after changing the policy. The initial implementation requires a Linux or macOS coordinator and Linux Docker images; Windows coordinator mode is explicitly refused.
 
@@ -94,12 +94,4 @@ OMB_WORKER_IMAGE=omb-container-runtime:dev \
 pnpm exec vitest run server/container-workers/docker.test.ts
 ```
 
-Record the source revision, image digest, platform, client versions, exact checks and any skipped/blocked cases for each qualification. Approval levels retain each client’s native semantics: Ask does not force every native command to prompt. Test an actual emitted request before claiming denial behavior. The prior Codex-only live prototype proof is historical; it does not prove the expanded implementation. Full `pnpm typecheck`, `pnpm test`, and `pnpm lint` remain required before submission.
-
-`scripts/verify-container-workers.ts` is a separate, optional authenticated Codex verifier. It requires an explicitly selected `OMB_CONTAINER_AUTH_FILE` and an `OMB_WORKER_IMAGE` containing the generic runtime plus Codex; it copies that selected account into disposable bot homes and makes live model calls. It is not part of CI or the credential-free smoke command. Its checks cover filesystem boundaries, delegation, coordinator restart, Stop followed by another turn, and denial of an actual emitted approval request. Run it only for an account and live-provider qualification you intend to perform:
-
-```sh
-OMB_CONTAINER_AUTH_FILE=/absolute/path/to/selected/auth.json \
-OMB_WORKER_IMAGE=your-codex-worker:tested-version \
-node --experimental-strip-types scripts/verify-container-workers.ts
-```
+Record the source revision, image digest, platform, client versions, exact checks and any skipped/blocked cases for each qualification. Approval levels retain each client’s native semantics: Ask does not force every native command to prompt. Test an actual emitted request before claiming denial behavior. Full `pnpm typecheck`, `pnpm test`, and `pnpm lint` remain required before submission.

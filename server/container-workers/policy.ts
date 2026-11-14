@@ -9,7 +9,6 @@ import type { AnyProviderDriver, InstanceConfig, ProviderInstance, SendTurnInput
 const workerSchema = z.object({
   instanceId: z.string().regex(/^[a-zA-Z0-9_-]+$/),
   image: z.string().min(1),
-  command: z.array(z.string()).min(1).optional(),
   home: z.string(),
   temp: z.string(),
   workspaces: z.array(z.string()).min(1),

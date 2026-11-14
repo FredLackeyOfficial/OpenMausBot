@@ -27,7 +27,7 @@ function fixture() {
   const workers = Object.fromEntries(["alice", "bob"].map((id) => {
     const paths = ["home", "temp", "work"].map((part) => join(root, id, part));
     paths.forEach((path) => mkdirSync(path, { recursive: true }));
-    return [id, { instanceId: id, image: "test", command: ["codex"], home: paths[0]!, temp: paths[1]!, workspaces: [paths[2]!] }];
+    return [id, { instanceId: id, image: "test", home: paths[0]!, temp: paths[1]!, workspaces: [paths[2]!] }];
   }));
   mkdirSync(join(root, "coordinator"));
   const path = join(root, "coordinator", "policy.json");
@@ -45,6 +45,12 @@ it("refuses overlapping mounts, symlink roots, shared engine identities, and pol
     const f = fixture(); mutation(f); f.save();
     expect(() => readWorkerPolicy(f.path)).toThrow();
   }
+});
+it("rejects executable overrides in worker policy", () => {
+  const f = fixture();
+  Object.assign(f.workers.alice!, { command: ["unexpected-executable"] });
+  f.save();
+  expect(() => readWorkerPolicy(f.path)).toThrow();
 });
 it("blocks uncontained engines and wrong-bot selections through the actual registry", async () => {
   const f = fixture();
